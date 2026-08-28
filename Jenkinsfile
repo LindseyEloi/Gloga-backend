@@ -31,10 +31,7 @@ pipeline {
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
                     sh '''
-                        # Login à Docker Hub AVANT le build
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-
-                        # Build de l'image
                         docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
                         docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
                     '''
@@ -50,10 +47,7 @@ pipeline {
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
                     sh '''
-                        # Login à Docker Hub AVANT le push
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-
-                        # Push des images
                         docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
                         docker push ${DOCKER_IMAGE}:latest
                     '''
@@ -69,14 +63,11 @@ pipeline {
                     passwordVariable: 'DB_PASSWORD'
                 )]) {
                     sh '''
-                        # Arrêter les anciens conteneurs
-                        docker compose down || true
-
-                        # Pull la nouvelle image
-                        docker compose pull || true
+                        # Utiliser docker-compose (avec tiret)
+                        docker-compose down || true
 
                         # Démarrer avec les nouvelles images
-                        DB_PASSWORD="$DB_PASSWORD" docker compose up -d
+                        DB_PASSWORD="$DB_PASSWORD" docker-compose up -d
                     '''
                 }
             }
@@ -85,13 +76,12 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline terminé avec succès ! Image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+            echo "✅ Pipeline terminé avec succès !"
         }
         failure {
-            echo 'Le pipeline a échoué.'
+            echo "❌ Le pipeline a échoué."
         }
         always {
-            // Nettoyer les anciennes images
             sh 'docker image prune -f || true'
         }
     }
