@@ -8,6 +8,7 @@ pipeline {
     environment {
         DOCKER_IMAGE = "lindseyeloi/mon-app-springboot"
         DOCKER_TAG = "${env.BUILD_NUMBER}"
+        APP_PORT = '8081'  // Port externe pour l'application
     }
 
     stages {
@@ -63,12 +64,14 @@ pipeline {
                     passwordVariable: 'DB_PASSWORD'
                 )]) {
                     sh '''
-                        # Créer le réseau
-                        docker network create app-network || true
+                        # Nettoyer les anciens conteneurs
+                        docker stop backend-app 2>/dev/null || true
+                        docker rm backend-app 2>/dev/null || true
+                        docker stop postgres-db 2>/dev/null || true
+                        docker rm postgres-db 2>/dev/null || true
 
-                        # Arrêter l'ancien PostgreSQL
-                        docker stop postgres-db || true
-                        docker rm postgres-db || true
+                        # Créer le réseau
+                        docker network create app-network 2>/dev/null || true
 
                         # Démarrer PostgreSQL
                         docker run -d \
@@ -86,11 +89,7 @@ pipeline {
                         echo "Attente du démarrage de PostgreSQL..."
                         sleep 15
 
-                        # Arrêter l'ancienne application
-                        docker stop backend-app || true
-                        docker rm backend-app || true
-
-                        # Démarrer l'application
+                        # Démarrer l'application sur le port 8081
                         docker run -d \
                             --name backend-app \
                             --network app-network \
@@ -100,11 +99,12 @@ pipeline {
                             -e DB_USER=${DB_USER} \
                             -e DB_PASSWORD=${DB_PASSWORD} \
                             -e SERVER_PORT=8080 \
-                            -p 8080:8080 \
+                            -p ${APP_PORT}:8080 \
                             --restart unless-stopped \
                             ${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                        # Vérifier que les conteneurs tournent
+                        # Vérifier les conteneurs
+                        echo "Conteneurs en cours d'exécution :"
                         docker ps
                     '''
                 }
@@ -118,10 +118,12 @@ pipeline {
                     sleep 20
 
                     # Vérifier que l'application répond
-                    curl -f http://localhost:8080/ || true
+                    echo "Test de l'application..."
+                    curl -f http://localhost:8081/actuator/health || curl -f http://localhost:8081/ || true
 
-                    # Voir les logs de l'application
-                    docker logs backend-app --tail 50
+                    # Voir les logs
+                    echo "Logs de l'application :"
+                    docker logs backend-app --tail 30
                 '''
             }
         }
@@ -130,12 +132,13 @@ pipeline {
     post {
         success {
             echo "✅ Pipeline terminé avec succès !"
-            echo "Application déployée sur http://localhost:8080"
+            echo "Application déployée sur http://localhost:8081"
         }
         failure {
             echo "❌ Le pipeline a échoué."
         }
         always {
+            // Nettoyer les anciennes images
             sh 'docker image prune -f || true'
         }
     }
