@@ -8,7 +8,7 @@ pipeline {
     environment {
         DOCKER_IMAGE = "lindseyeloi/mon-app-springboot"
         DOCKER_TAG = "${env.BUILD_NUMBER}"
-        APP_PORT = '8085'  // Port externe pour l'application
+        APP_PORT = '9091'  // Port externe pour l'application
         DB_PORT = '5432'
     }
 
