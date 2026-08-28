@@ -1,6 +1,9 @@
 pipeline {
     agent any
 
+    tools {
+        maven 'Maven'
+    }
     environment {
         DOCKER_IMAGE = "mon-utilisateur/mon-app-springboot"
         DOCKER_TAG = "${env.BUILD_NUMBER}"
@@ -15,7 +18,7 @@ pipeline {
 
         stage('Build & Test') {
             steps {
-                sh './mvnw clean package'
+                sh 'mvn clean package'
             }
         }
 
