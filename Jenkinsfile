@@ -8,7 +8,8 @@ pipeline {
     environment {
         DOCKER_IMAGE = "lindseyeloi/mon-app-springboot"
         DOCKER_TAG = "${env.BUILD_NUMBER}"
-        APP_PORT = '8081'  // Port externe pour l'application
+        APP_PORT = '8085'  // Port externe pour l'application
+        DB_PORT = '5432'
     }
 
     stages {
@@ -64,32 +65,31 @@ pipeline {
                     passwordVariable: 'DB_PASSWORD'
                 )]) {
                     sh '''
-                        # Nettoyer les anciens conteneurs
+                        echo "=== Nettoyage des anciens conteneurs ==="
                         docker stop backend-app 2>/dev/null || true
                         docker rm backend-app 2>/dev/null || true
                         docker stop postgres-db 2>/dev/null || true
                         docker rm postgres-db 2>/dev/null || true
 
-                        # Créer le réseau
+                        echo "=== Création du réseau ==="
                         docker network create app-network 2>/dev/null || true
 
-                        # Démarrer PostgreSQL
+                        echo "=== Démarrage de PostgreSQL ==="
                         docker run -d \
                             --name postgres-db \
                             --network app-network \
                             -e POSTGRES_DB=centre_medical \
                             -e POSTGRES_USER=${DB_USER} \
                             -e POSTGRES_PASSWORD=${DB_PASSWORD} \
-                            -p 5432:5432 \
+                            -p ${DB_PORT}:5432 \
                             -v pgdata:/var/lib/postgresql/data \
                             --restart unless-stopped \
                             postgres:16-alpine
 
-                        # Attendre que PostgreSQL soit prêt
-                        echo "Attente du démarrage de PostgreSQL..."
+                        echo "=== Attente du démarrage de PostgreSQL ==="
                         sleep 15
 
-                        # Démarrer l'application sur le port 8081
+                        echo "=== Démarrage de l'application sur le port ${APP_PORT} ==="
                         docker run -d \
                             --name backend-app \
                             --network app-network \
@@ -103,8 +103,7 @@ pipeline {
                             --restart unless-stopped \
                             ${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                        # Vérifier les conteneurs
-                        echo "Conteneurs en cours d'exécution :"
+                        echo "=== Conteneurs en cours d'exécution ==="
                         docker ps
                     '''
                 }
@@ -114,16 +113,14 @@ pipeline {
         stage('Health Check') {
             steps {
                 sh '''
-                    # Attendre que l'application démarre
+                    echo "=== Attente du démarrage de l'application ==="
                     sleep 20
 
-                    # Vérifier que l'application répond
-                    echo "Test de l'application..."
-                    curl -f http://localhost:8081/actuator/health || curl -f http://localhost:8081/ || true
+                    echo "=== Test de l'application sur le port ${APP_PORT} ==="
+                    curl -f http://localhost:${APP_PORT}/ || true
 
-                    # Voir les logs
-                    echo "Logs de l'application :"
-                    docker logs backend-app --tail 30
+                    echo "=== Logs de l'application ==="
+                    docker logs backend-app --tail 50
                 '''
             }
         }
@@ -132,13 +129,16 @@ pipeline {
     post {
         success {
             echo "✅ Pipeline terminé avec succès !"
-            echo "Application déployée sur http://localhost:8081"
+            echo "📱 Application déployée sur http://localhost:${APP_PORT}"
+            echo "🐘 PostgreSQL sur localhost:${DB_PORT}"
+            echo "🏗️  Image Docker: ${DOCKER_IMAGE}:${DOCKER_TAG}"
         }
         failure {
             echo "❌ Le pipeline a échoué."
+            echo "Vérifiez les logs pour plus de détails."
         }
         always {
-            // Nettoyer les anciennes images
+            // Nettoyer les anciennes images Docker
             sh 'docker image prune -f || true'
         }
     }
