@@ -34,10 +34,11 @@ pipeline {
         stage('Checkout Frontend') {
             steps {
                 echo "=== Récupération du frontend ==="
-                git branch: 'master',
-                    url: 'https://github.com/LindseyEloi/Gloga-frontend.git'
-                // Si le repo est privé, ajoutez :
-                // credentialsId: 'git-creds'
+                // Cloner dans un sous-dossier séparé
+                dir('frontend') {
+                    git branch: 'master',
+                        url: 'https://github.com/LindseyEloi/Gloga-frontend.git'
+                }
             }
         }
 
@@ -51,7 +52,7 @@ pipeline {
         stage('Build Frontend') {
             steps {
                 echo "=== Build du frontend ==="
-                dir('centre-medical-client') {
+                dir('frontend') {
                     sh 'mvn clean package'
                 }
             }
@@ -74,7 +75,7 @@ pipeline {
                     '''
                 }
 
-                dir('centre-medical-client') {
+                dir('frontend') {
                     withCredentials([usernamePassword(
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKER_USER',
@@ -184,10 +185,8 @@ pipeline {
                     echo "=== Test frontend ==="
                     curl -f http://localhost:${APP_PORT_FRONTEND}/ || true
 
-                    echo "=== Logs backend ==="
+                    echo "=== Logs ==="
                     docker logs ${BACKEND_CONTAINER} --tail 20
-
-                    echo "=== Logs frontend ==="
                     docker logs ${FRONTEND_CONTAINER} --tail 20
                 '''
             }
