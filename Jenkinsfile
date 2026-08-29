@@ -1,41 +1,55 @@
 pipeline {
     agent any
 
-    tools {
-        maven 'Maven'
-    }
+    tools { maven 'Maven' }
 
     environment {
-        DOCKER_IMAGE = "lindseyeloi/mon-app-springboot"
+        DOCKER_HUB_USER = 'lindseyeloi'
+        BACKEND_IMAGE = "${DOCKER_HUB_USER}/centre-medical-backend"
+        FRONTEND_IMAGE = "${DOCKER_HUB_USER}/centre-medical-client"
         DOCKER_TAG = "${env.BUILD_NUMBER}"
-        APP_PORT = '9091'  // Port externe pour l'application
+        APP_PORT = '9091'          // Port exposé pour le backend
+        FRONTEND_PORT = '9092'     // Port exposé pour le frontend (éviter conflits)
         DB_PORT = '5432'
     }
 
     stages {
         stage('Checkout') {
             steps {
+                // On suppose que le dépôt contient les deux dossiers
                 checkout scm
             }
         }
 
-        stage('Build & Test') {
+        stage('Build Backend') {
             steps {
-                sh 'mvn clean package'
+                dir('centre-medical-backend') {
+                    sh 'mvn clean package'
+                }
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build Frontend') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
+                dir('centre-medical-client') {
+                    sh 'mvn clean package'
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                        docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
+
+                        # Backend
+                        docker build -t ${BACKEND_IMAGE}:${DOCKER_TAG} ./centre-medical-backend
+                        docker tag ${BACKEND_IMAGE}:${DOCKER_TAG} ${BACKEND_IMAGE}:latest
+
+                        # Frontend
+                        docker build -t ${FRONTEND_IMAGE}:${DOCKER_TAG} ./centre-medical-client
+                        docker tag ${FRONTEND_IMAGE}:${DOCKER_TAG} ${FRONTEND_IMAGE}:latest
                     '''
                 }
             }
@@ -43,41 +57,29 @@ pipeline {
 
         stage('Push to Registry') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        docker push ${DOCKER_IMAGE}:latest
+                        docker push ${BACKEND_IMAGE}:${DOCKER_TAG}
+                        docker push ${BACKEND_IMAGE}:latest
+                        docker push ${FRONTEND_IMAGE}:${DOCKER_TAG}
+                        docker push ${FRONTEND_IMAGE}:latest
                     '''
                 }
             }
         }
 
-        stage('Deploy') {
+        stage('Deploy with Docker Compose') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'postgres-creds',
-                    usernameVariable: 'DB_USER',
-                    passwordVariable: 'DB_PASSWORD'
-                )]) {
+                withCredentials([usernamePassword(credentialsId: 'postgres-creds', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASSWORD')]) {
                     sh '''
-                        echo "=== Nettoyage des anciens conteneurs ==="
-                        docker stop backend-app 2>/dev/null || true
-                        docker rm backend-app 2>/dev/null || true
-                        docker stop postgres-db 2>/dev/null || true
-                        docker rm postgres-db 2>/dev/null || true
-
-                        echo "=== Création du réseau ==="
+                        # Nettoyage
+                        docker stop backend-app frontend-app postgres-db 2>/dev/null || true
+                        docker rm backend-app frontend-app postgres-db 2>/dev/null || true
                         docker network create app-network 2>/dev/null || true
 
-                        echo "=== Démarrage de PostgreSQL ==="
-                        docker run -d \
-                            --name postgres-db \
-                            --network app-network \
+                        # Démarrer PostgreSQL
+                        docker run -d --name postgres-db --network app-network \
                             -e POSTGRES_DB=centre_medical \
                             -e POSTGRES_USER=${DB_USER} \
                             -e POSTGRES_PASSWORD=${DB_PASSWORD} \
@@ -86,24 +88,23 @@ pipeline {
                             --restart unless-stopped \
                             postgres:16-alpine
 
-                        echo "=== Attente du démarrage de PostgreSQL ==="
                         sleep 15
 
-                        echo "=== Démarrage de l'application sur le port ${APP_PORT} ==="
-                        docker run -d \
-                            --name backend-app \
-                            --network app-network \
-                            -e DB_HOST=postgres-db \
-                            -e DB_PORT=5432 \
-                            -e DB_NAME=centre_medical \
-                            -e DB_USER=${DB_USER} \
-                            -e DB_PASSWORD=${DB_PASSWORD} \
-                            -e SERVER_PORT=8080 \
+                        # Démarrer backend
+                        docker run -d --name backend-app --network app-network \
+                            -e DB_HOST=postgres-db -e DB_PORT=5432 -e DB_NAME=centre_medical \
+                            -e DB_USER=${DB_USER} -e DB_PASSWORD=${DB_PASSWORD} \
                             -p ${APP_PORT}:8080 \
                             --restart unless-stopped \
-                            ${DOCKER_IMAGE}:${DOCKER_TAG}
+                            ${BACKEND_IMAGE}:${DOCKER_TAG}
 
-                        echo "=== Conteneurs en cours d'exécution ==="
+                        # Démarrer frontend (en supposant qu'il écoute sur 8081 en interne)
+                        docker run -d --name frontend-app --network app-network \
+                            -e BACKEND_URL=http://backend-app:8080/api \
+                            -p ${FRONTEND_PORT}:8081 \
+                            --restart unless-stopped \
+                            ${FRONTEND_IMAGE}:${DOCKER_TAG}
+
                         docker ps
                     '''
                 }
@@ -113,14 +114,13 @@ pipeline {
         stage('Health Check') {
             steps {
                 sh '''
-                    echo "=== Attente du démarrage de l'application ==="
                     sleep 20
-
-                    echo "=== Test de l'application sur le port ${APP_PORT} ==="
+                    echo "Backend :"
                     curl -f http://localhost:${APP_PORT}/ || true
-
-                    echo "=== Logs de l'application ==="
-                    docker logs backend-app --tail 50
+                    echo "\nFrontend :"
+                    curl -f http://localhost:${FRONTEND_PORT}/ || true
+                    docker logs backend-app --tail 20
+                    docker logs frontend-app --tail 20
                 '''
             }
         }
@@ -128,17 +128,14 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline terminé avec succès !"
-            echo "📱 Application déployée sur http://localhost:${APP_PORT}"
-            echo "🐘 PostgreSQL sur localhost:${DB_PORT}"
-            echo "🏗️  Image Docker: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+            echo "✅ Pipeline réussi !"
+            echo "Backend : http://localhost:${APP_PORT}"
+            echo "Frontend : http://localhost:${FRONTEND_PORT}"
         }
         failure {
-            echo "❌ Le pipeline a échoué."
-            echo "Vérifiez les logs pour plus de détails."
+            echo "❌ Échec"
         }
         always {
-            // Nettoyer les anciennes images Docker
             sh 'docker image prune -f || true'
         }
     }
