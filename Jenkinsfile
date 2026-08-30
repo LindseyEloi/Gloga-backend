@@ -99,13 +99,47 @@ pipeline {
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
                     sh '''
-                        echo "=== Push images ==="
+                        echo "=== Login Docker Hub ==="
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
 
+                        echo "=== Push image backend ==="
                         docker push ${DOCKER_IMAGE_BACKEND}:${DOCKER_TAG_BACKEND}
                         docker push ${DOCKER_IMAGE_BACKEND}:latest
-                        docker push ${DOCKER_IMAGE_FRONTEND}:${DOCKER_TAG_FRONTEND}
-                        docker push ${DOCKER_IMAGE_FRONTEND}:latest
+                        echo "✅ Backend poussé avec succès"
+
+                        echo "=== Push image frontend Swing (avec retry) ==="
+
+                        # Push avec retry pour l'image frontend
+                        MAX_RETRIES=3
+                        RETRY_COUNT=0
+                        PUSH_SUCCESS=false
+
+                        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                            echo "Tentative $((RETRY_COUNT+1)) de push..."
+
+                            if docker push ${DOCKER_IMAGE_FRONTEND}:${DOCKER_TAG_FRONTEND}; then
+                                echo "✅ Push frontend réussi !"
+                                PUSH_SUCCESS=true
+                                break
+                            else
+                                echo "❌ Tentative $((RETRY_COUNT+1)) échouée"
+                                RETRY_COUNT=$((RETRY_COUNT+1))
+
+                                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                                    echo "Attente de 15 secondes avant la prochaine tentative..."
+                                    sleep 15
+                                fi
+                            fi
+                        done
+
+                        if [ "$PUSH_SUCCESS" = true ]; then
+                            echo "=== Push latest tag ==="
+                            docker push ${DOCKER_IMAGE_FRONTEND}:latest
+                            echo "✅ Frontend poussé avec succès"
+                        else
+                            echo "⚠️ Échec du push frontend après $MAX_RETRIES tentatives"
+                            echo "Utilisation de l'image locale pour le déploiement"
+                        fi
                     '''
                 }
             }
