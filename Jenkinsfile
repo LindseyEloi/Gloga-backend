@@ -16,11 +16,11 @@ pipeline {
         DB_CONTAINER = 'postgres-db'
         NETWORK_NAME = 'app-network'
 
-        // Frontend
-        DOCKER_IMAGE_FRONTEND = "lindseyeloi/centre-medical-client"
+        // Frontend Swing
+        DOCKER_IMAGE_FRONTEND = "lindseyeloi/centre-medical-swing"
         DOCKER_TAG_FRONTEND = "${env.BUILD_NUMBER}"
         APP_PORT_FRONTEND = '8082'
-        FRONTEND_CONTAINER = 'frontend-app'
+        FRONTEND_CONTAINER = 'swing-app'
     }
 
     stages {
@@ -34,7 +34,6 @@ pipeline {
         stage('Checkout Frontend') {
             steps {
                 echo "=== Récupération du frontend ==="
-                // Cloner dans un sous-dossier séparé
                 dir('frontend') {
                     git branch: 'master',
                         url: 'https://github.com/LindseyEloi/Gloga-frontend.git'
@@ -49,9 +48,9 @@ pipeline {
             }
         }
 
-        stage('Build Frontend') {
+        stage('Build Frontend Swing') {
             steps {
-                echo "=== Build du frontend ==="
+                echo "=== Build du frontend Swing ==="
                 dir('frontend') {
                     sh 'mvn clean package'
                 }
@@ -75,6 +74,7 @@ pipeline {
                     '''
                 }
 
+                echo "=== Build image frontend Swing avec VNC ==="
                 dir('frontend') {
                     withCredentials([usernamePassword(
                         credentialsId: 'dockerhub-creds',
@@ -82,7 +82,7 @@ pipeline {
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
                         sh '''
-                            echo "=== Build image frontend ==="
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
                             docker build -t ${DOCKER_IMAGE_FRONTEND}:${DOCKER_TAG_FRONTEND} .
                             docker tag ${DOCKER_IMAGE_FRONTEND}:${DOCKER_TAG_FRONTEND} ${DOCKER_IMAGE_FRONTEND}:latest
                         '''
@@ -142,6 +142,7 @@ pipeline {
                             --restart unless-stopped \
                             postgres:16-alpine
 
+                        echo "=== Attente PostgreSQL ==="
                         sleep 15
 
                         echo "=== Démarrage backend ==="
@@ -157,14 +158,13 @@ pipeline {
                             --restart unless-stopped \
                             ${DOCKER_IMAGE_BACKEND}:${DOCKER_TAG_BACKEND}
 
-                        echo "=== Démarrage frontend ==="
+                        echo "=== Démarrage frontend Swing avec VNC ==="
                         docker run -d \
                             --name ${FRONTEND_CONTAINER} \
                             --network ${NETWORK_NAME} \
-                            -e BACKEND_URL=http://${BACKEND_CONTAINER}:8080 \
                             -p ${APP_PORT_FRONTEND}:8080 \
                             --restart unless-stopped \
-                            ${DOCKER_IMAGE_FRONTEND}:${DOCKER_TAG_FRONTEND}
+                            ${DOCKER_IMAGE_FRONTEND}:latest
 
                         echo "=== Conteneurs ==="
                         docker ps
@@ -182,11 +182,13 @@ pipeline {
                     echo "=== Test backend ==="
                     curl -f http://localhost:${APP_PORT_BACKEND}/ || true
 
-                    echo "=== Test frontend ==="
-                    curl -f http://localhost:${APP_PORT_FRONTEND}/ || true
+                    echo "=== Test frontend Swing VNC ==="
+                    curl -f http://localhost:${APP_PORT_FRONTEND}/vnc.html || true
 
-                    echo "=== Logs ==="
+                    echo "=== Logs backend ==="
                     docker logs ${BACKEND_CONTAINER} --tail 20
+
+                    echo "=== Logs frontend Swing ==="
                     docker logs ${FRONTEND_CONTAINER} --tail 20
                 '''
             }
@@ -196,8 +198,8 @@ pipeline {
     post {
         success {
             echo "✅ Pipeline réussi !"
-            echo "Backend: http://localhost:${APP_PORT_BACKEND}"
-            echo "Frontend: http://localhost:${APP_PORT_FRONTEND}"
+            echo "Backend API: http://localhost:${APP_PORT_BACKEND}"
+            echo "Frontend Swing: http://localhost:${APP_PORT_FRONTEND}/vnc.html"
         }
         failure {
             echo "❌ Échec"
